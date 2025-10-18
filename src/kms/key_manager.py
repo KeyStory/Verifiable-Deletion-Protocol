@@ -15,9 +15,12 @@ KMS Key Manager - 密钥管理服务核心实现
 
 from dataclasses import dataclass
 from datetime import datetime
+import sys
 from typing import Any
 from enum import Enum
+from ..blockchain.contract_manager import ContractManager
 import gc
+import hashlib
 
 # 导入本包的工具和异常
 from .utils import (
@@ -238,12 +241,17 @@ class KeyManagementService:
         >>> success = kms.destroy_key(key_id, DestructionMethod.DOD_OVERWRITE)
     """
 
-    def __init__(self, master_key: bytes | None = None):
+    def __init__(
+        self,
+        master_key: bytes | None = None,
+        contract_manager: ContractManager | None = None,
+    ):
         """
         初始化KMS
 
         Args:
             master_key: 主密钥（用于加密其他密钥，可选）
+            contract_manager: 区块链合约管理器（可选，用于链上记录）
         """
         self._keys: dict[str, SecureKey] = {}
         self._master_key = master_key
@@ -252,7 +260,19 @@ class KeyManagementService:
             "total_generated": 0,
             "total_destroyed": 0,
             "total_accesses": 0,
+            "blockchain_recordings": 0,  # 新增：区块链记录计数
+            "blockchain_failures": 0,  # 新增：区块链记录失败计数
         }
+
+        # 新增：区块链连接
+        self._contract_manager = contract_manager
+        if self._contract_manager and not self._contract_manager.is_connected():
+            try:
+                self._contract_manager.connect()
+                print("✓ KMS connected to blockchain")
+            except Exception as e:
+                print(f"⚠ KMS blockchain connection failed: {e}")
+                self._contract_manager = None  # 禁用区块链功能
 
     def generate_key(
         self,
@@ -458,6 +478,55 @@ class KeyManagementService:
             secure_key.metadata.status = KeyStatus.DESTROYED
             secure_key.metadata.destruction_method = method
             secure_key.metadata.destroyed_at = get_utc_timestamp()
+
+            # 生成删除证明哈希
+            proof_hash = self._generate_proof_hash(
+                key_id,
+                method.value,
+                secure_key.metadata.destroyed_at,
+                secure_key.metadata.fingerprint,
+            )
+
+            # 如果配置了区块链，记录到链上
+            if self._contract_manager:
+                try:
+                    blockchain_result = self._contract_manager.record_deletion(
+                        key_id=key_id,
+                        destruction_method=method.value,
+                        proof_hash=proof_hash,
+                        wait_for_confirmation=True,
+                    )
+
+                    # 记录交易哈希到审计日志
+                    self._log_operation(
+                        "blockchain_record_success",
+                        key_id,
+                        {
+                            "tx_hash": blockchain_result["tx_hash"],
+                            "proof_hash": proof_hash,
+                            "block_number": blockchain_result.get("block_number"),
+                        },
+                    )
+
+                    self._stats["blockchain_recordings"] += 1
+
+                    print(
+                        f"✓ Deletion recorded on blockchain: {blockchain_result['tx_hash']}"
+                    )
+
+                except Exception as e:
+                    # 区块链记录失败，但密钥已销毁
+                    self._log_operation(
+                        "blockchain_record_failed",
+                        key_id,
+                        {
+                            "error": str(e),
+                            "proof_hash": proof_hash,
+                        },
+                    )
+                    print(f"⚠ Blockchain recording failed: {str(e)}")
+                    self._stats["blockchain_failures"] += 1
+
             secure_key._key_data = bytearray()
 
             self._stats["total_destroyed"] += 1
@@ -486,6 +555,55 @@ class KeyManagementService:
                 },
             )
             raise DestructionFailedError(key_id, method.value, str(e))
+
+    def verify_deletion_on_blockchain(self, key_id: str) -> dict[str, Any] | None:
+        """
+        验证密钥删除是否已记录在区块链上
+
+        Args:
+            key_id: 密钥ID
+
+        Returns:
+            删除记录字典，如果未找到返回None
+        """
+        if not self._contract_manager:
+            raise ValueError("No blockchain contract manager configured")
+
+        try:
+            record = self._contract_manager.get_deletion_record(key_id)
+
+            if record:
+                self._log_operation(
+                    "blockchain_verify_success", key_id, {"record": record}
+                )
+
+            return record
+        except Exception as e:
+            self._log_operation("blockchain_verify_failed", key_id, {"error": str(e)})
+            return None
+
+    def _generate_proof_hash(
+        self, key_id: str, method: str, timestamp: datetime, fingerprint: str
+    ) -> str:
+        """
+        生成删除证明哈希
+
+        Args:
+            key_id: 密钥ID
+            method: 销毁方法
+            timestamp: 销毁时间
+            fingerprint: 密钥指纹
+
+        Returns:
+            str: 32字节的十六进制哈希
+        """
+        # 组合删除信息
+        proof_data = f"{key_id}|{method}|{timestamp_to_iso(timestamp)}|{fingerprint}"
+
+        # 生成SHA-256哈希
+        proof_hash = hashlib.sha256(proof_data.encode()).hexdigest()
+
+        return proof_hash
 
     def _destroy_simple_del(self, key_data: bytearray) -> None:
         """方法A: 简单Python del（对照组）"""
@@ -540,9 +658,44 @@ class KeyManagementService:
 
         return result
 
+    def get_blockchain_status(self) -> dict[str, Any]:
+        """
+        获取区块链连接状态
+
+        Returns:
+            包含连接状态和统计信息的字典
+        """
+        if not self._contract_manager:
+            return {
+                "enabled": False,
+                "connected": False,
+                "contract_address": None,
+            }
+
+        return {
+            "enabled": True,
+            "connected": self._contract_manager.is_connected(),
+            "contract_address": self._contract_manager.contract_address,
+            "total_recordings": self._stats["blockchain_recordings"],
+            "total_failures": self._stats["blockchain_failures"],
+            "success_rate": (
+                self._stats["blockchain_recordings"]
+                / (
+                    self._stats["blockchain_recordings"]
+                    + self._stats["blockchain_failures"]
+                )
+                if (
+                    self._stats["blockchain_recordings"]
+                    + self._stats["blockchain_failures"]
+                )
+                > 0
+                else 0
+            ),
+        }
+
     def get_statistics(self) -> dict[str, Any]:
         """获取KMS统计信息"""
-        return {
+        stats = {
             **self._stats,
             "total_keys": len(self._keys),
             "active_keys": len(
@@ -559,7 +712,14 @@ class KeyManagementService:
                     if k.metadata.status == KeyStatus.DESTROYED
                 ]
             ),
+            "blockchain_enabled": self._contract_manager is not None,
         }
+
+        # 如果有区块链连接，添加更多信息
+        if self._contract_manager:
+            stats["blockchain_connected"] = self._contract_manager.is_connected()
+
+        return stats
 
 
 # ===== 测试 =====
@@ -600,6 +760,31 @@ if __name__ == "__main__":
         key_id = kms.generate_key(16, "AES-128-GCM", "test", "system")
         success = kms.destroy_key(key_id, method)
         print(f"   ✅ 方法{i} ({method.value}): {'成功' if success else '失败'}")
+
+    print("\n4.1 测试区块链集成销毁:")
+    # 只有在配置了区块链时才测试
+    if "--with-blockchain" in sys.argv:
+        from ..blockchain.contract_manager import ContractManager
+
+        # 创建带区块链的KMS
+        cm = ContractManager()
+        kms_with_blockchain = KeyManagementService(contract_manager=cm)
+
+        # 生成并销毁一个密钥
+        test_key = kms_with_blockchain.generate_key(
+            32, "AES-256-GCM", "blockchain_test"
+        )
+        success = kms_with_blockchain.destroy_key(
+            test_key, DestructionMethod.DOD_OVERWRITE
+        )
+
+        if success:
+            # 验证区块链记录
+            record = kms_with_blockchain.verify_deletion_on_blockchain(test_key)
+            if record:
+                print(f"   ✅ 区块链验证成功: {record['proof_hash'][:10]}...")
+    else:
+        print("   ℹ️  跳过区块链测试 (使用 --with-blockchain 启用)")
 
     print("\n5. 测试审计日志:")
     logs = kms.get_audit_log(operation="destroy_key_success")

@@ -28,13 +28,11 @@ class EncryptionMetadata:
         key_id: str,
         algorithm: str,
         nonce: bytes,
-        tag: bytes | None = None,
         encrypted_at: datetime | None = None,
     ):
         self.key_id = key_id
         self.algorithm = algorithm
         self.nonce = nonce
-        self.tag = tag
         self.encrypted_at = encrypted_at or datetime.utcnow()
 
     def to_dict(self) -> dict[str, Any]:
@@ -43,7 +41,6 @@ class EncryptionMetadata:
             "key_id": self.key_id,
             "algorithm": self.algorithm,
             "nonce": self.nonce.hex(),
-            "tag": self.tag.hex() if self.tag else None,
             "encrypted_at": self.encrypted_at.isoformat(),
         }
 
@@ -54,7 +51,6 @@ class EncryptionMetadata:
             key_id=data["key_id"],
             algorithm=data["algorithm"],
             nonce=bytes.fromhex(data["nonce"]),
-            tag=bytes.fromhex(data["tag"]) if data.get("tag") else None,
             encrypted_at=datetime.fromisoformat(data["encrypted_at"]),
         )
 

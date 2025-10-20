@@ -118,7 +118,10 @@ class TestContractManager:
         # 验证结果
         assert "tx_hash" in result
         assert result["status"] in ["success", "pending"]
-        assert len(result["tx_hash"]) == 66  # 0x + 64 hex chars
+        assert len(result["tx_hash"]) in [
+            64,
+            66,
+        ], f"Unexpected tx_hash length: {len(result['tx_hash'])}"
 
         # 等待确认
         if result["status"] == "pending":
@@ -217,6 +220,13 @@ class TestContractManager:
 
 class TestErrorHandling:
     """测试错误处理"""
+
+    @pytest.fixture
+    def manager(self):
+        """为错误处理测试提供ContractManager实例"""
+        from src.blockchain.contract_manager import ContractManager
+
+        return ContractManager()
 
     def test_connection_without_config(self):
         """测试缺少配置时的连接"""

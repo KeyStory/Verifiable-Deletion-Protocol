@@ -200,6 +200,125 @@ KMS_DESTRUCTION_METHOD=ctypes_secure
 python demo.py
 ```
 
+## 删除证书生成
+
+### 自动生成证书
+```python
+from src.kms.key_manager import KeyManagementService, DestructionMethod
+from src.crypto.crypto_manager import CryptoManager
+
+kms = KeyManagementService()
+crypto = CryptoManager(kms)
+
+# 删除数据时自动生成证书
+result = crypto.delete_user_data(
+    user_id="user_001",
+    destruction_method=DestructionMethod.CTYPES_SECURE,
+    generate_certificate=True  # ⭐ 自动生成证书
+)
+
+if 'certificate' in result:
+    cert = result['certificate']
+    print(f"证书ID: {cert['certificate_id']}")
+    print(f"保存位置: {cert['json_path']}")
+```
+
+### 手动生成证书
+```python
+from src.crypto.certificate_generator import DeletionCertificateGenerator
+
+# 先删除数据
+result = crypto.delete_user_data(
+    user_id="user_001",
+    destruction_method=DestructionMethod.CTYPES_SECURE,
+    generate_certificate=False
+)
+
+# 再手动生成证书
+generator = DeletionCertificateGenerator(
+    contract_manager=kms._contract_manager
+)
+
+cert_result = generator.generate_certificate(result)
+print(f"证书ID: {cert_result['certificate_id']}")
+```
+
+### 证书管理
+```python
+from src.crypto.certificate_generator import DeletionCertificateGenerator
+
+generator = DeletionCertificateGenerator()
+
+# 列出所有证书
+certificates = generator.list_certificates()
+print(f"共 {len(certificates)} 个证书")
+
+# 加载证书
+cert_data = generator.load_certificate("CERT-20251021-ABC12345")
+print(cert_data)
+```
+
+### 证书结构
+
+生成的JSON证书包含以下信息：
+```json
+{
+  "certificate": {
+    "id": "CERT-20251021-ABC12345",
+    "version": "1.0",
+    "issue_date": "2025-10-21T10:30:00Z",
+    "user": {
+      "user_id": "user_001",
+      "user_id_hash": "sha256:...",
+      "deletion_request_time": "2025-10-21T10:28:00Z"
+    },
+    "deletion_details": {
+      "key_id": "user_user_001_dek",
+      "deletion_method": "ctypes_secure",
+      "deletion_timestamp": "2025-10-21T10:30:00Z",
+      "verification_status": "CONFIRMED"
+    },
+    "blockchain_proof": {
+      "network": "ethereum_sepolia",
+      "transaction_hash": "0x123abc...",
+      "block_number": 12345678,
+      "proof_hash": "0x789def..."
+    },
+    "verification": {
+      "blockchain_explorer_url": "https://sepolia.etherscan.io/tx/0x123...",
+      "verification_tool_command": "python tools/verify_deletion.py CERT-..."
+    },
+    "technical_details": {
+      "encryption_algorithm": "AES-256-GCM",
+      "key_size_bits": 256,
+      "destruction_method": "ctypes_secure"
+    }
+  }
+}
+```
+
+### 验证删除证书
+
+证书生成后，可以通过以下方式验证：
+
+1. **使用验证工具**（推荐）：
+```bash
+   python tools/verify_deletion.py certificates/CERT-20251021-ABC12345.json
+```
+
+2. **访问区块链浏览器**：
+   打开证书中的 `blockchain_explorer_url` 链接
+
+3. **编程验证**：
+```python
+   generator = DeletionCertificateGenerator()
+   cert = generator.load_certificate("CERT-20251021-ABC12345")
+   
+   # 查看区块链证明
+   blockchain = cert['certificate']['blockchain_proof']
+   print(f"交易哈希: {blockchain['transaction_hash']}")
+```
+
 ---
 
 ## 🎮 演示使用

@@ -222,6 +222,7 @@ class CryptoManager:
         self,
         user_id: str,
         destruction_method,
+        generate_certificate: bool = False,
     ) -> dict[str, Any]:
         """
         删除用户数据（销毁加密密钥）⭐ 核心方法
@@ -231,6 +232,7 @@ class CryptoManager:
         Args:
             user_id: 用户ID
             destruction_method: 密钥销毁方法
+            generate_certificate: 是否生成删除证书（默认False）
 
         Returns:
             dict: 删除结果
@@ -239,6 +241,7 @@ class CryptoManager:
                 - method: 销毁方法
                 - blockchain_tx: 区块链交易哈希（如果有）
                 - timestamp: 删除时间
+                - certificate: 证书信息（如果generate_certificate=True）
         """
         key_id = f"user_{user_id}_dek"
 
@@ -264,6 +267,22 @@ class CryptoManager:
                 latest_log = logs[-1]
                 result["blockchain_tx"] = latest_log["details"]["tx_hash"]
                 result["proof_hash"] = latest_log["details"]["proof_hash"]
+
+        # 生成删除证书（如果请求）
+        if generate_certificate and success:
+            try:
+                from .certificate_generator import DeletionCertificateGenerator
+
+                generator = DeletionCertificateGenerator(
+                    contract_manager=self.kms._contract_manager
+                )
+
+                cert_result = generator.generate_certificate(deletion_result=result)
+
+                result["certificate"] = cert_result
+            except Exception as e:
+                # 证书生成失败不应影响删除操作
+                result["certificate_error"] = str(e)
 
         return result
 

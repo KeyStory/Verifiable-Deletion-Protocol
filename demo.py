@@ -445,6 +445,198 @@ class DemoRunner:
         print("✅ 区块链场景演示完成！")
         print("=" * 70)
 
+    def run_certificate_scenario(self):
+        """
+        场景4：删除证书生成与验证
+
+        演示：生成删除证书、保存、加载、验证
+        """
+        print("=" * 70)
+        print("场景4：删除证书生成与验证")
+        print("=" * 70)
+
+        print("\n目标：演示如何生成可验证的删除证书")
+
+        if not self.kms._contract_manager:
+            print(f"  ⚠ 区块链未连接，请连接到区块链")
+            raise ValueError("self.kms._contract_manager is None")
+
+        # 检查区块链状态
+        has_blockchain = self.kms._contract_manager is not None
+        if not self.kms._contract_manager:
+            print(f"  ⚠ 区块链未连接，请连接到区块链")
+            raise ValueError("self.kms._contract_manager is None")
+        else:
+            print(f"  ✓ 区块链已连接")
+            print(f"  合约地址: {self.kms._contract_manager.contract_address}")
+
+        # 创建测试用户
+        user_id = f"cert_demo_user_{int(time.time())}"
+        username = f"CertUser_{int(time.time())}"
+
+        print(f"\n[步骤 1/6] 创建测试用户")
+        print(f"  用户ID: {user_id}")
+        print(f"  用户名: {username}")
+
+        self.db.create_user(user_id, username, f"{username}@example.com")
+        print("  ✓ 用户已创建")
+
+        # 加密数据
+        print(f"\n[步骤 2/6] 加密敏感数据")
+        test_data = f"机密文档：用户 {username} 的个人健康记录"
+
+        ciphertext, metadata = self.crypto.encrypt_user_data(
+            user_id=user_id, data=test_data, associated_data=user_id
+        )
+
+        self.db.store_encrypted_data(
+            user_id=user_id,
+            data_type="health_record",
+            ciphertext=ciphertext,
+            metadata=metadata.to_dict(),
+        )
+
+        print(f"  ✓ 数据已加密存储")
+        print(f"  密钥ID: {metadata.key_id}")
+
+        # 删除数据并自动生成证书
+        print(f"\n[步骤 3/6] 删除数据并生成证书")
+        print("  正在销毁密钥...")
+
+        deletion_result = self.crypto.delete_user_data(
+            user_id=user_id,
+            destruction_method=DestructionMethod.CTYPES_SECURE,
+            generate_certificate=True,  # ⭐ 自动生成证书
+        )
+
+        print(f"  ✓ 密钥已销毁")
+        print(f"  销毁方法: {deletion_result['method']}")
+
+        if has_blockchain and "blockchain_tx" in deletion_result:
+            print(f"  ✓ 区块链交易: {deletion_result['blockchain_tx']}")
+
+        # 检查证书生成结果
+        if "certificate" in deletion_result:
+            cert = deletion_result["certificate"]
+            print(f"\n  📜 删除证书已生成:")
+            print(f"     证书ID: {cert['certificate_id']}")
+            print(f"     保存路径: {cert['json_path']}")
+
+            # 显示证书内容摘要
+            cert_data = cert["json_data"]["certificate"]
+
+            print(f"\n[步骤 4/6] 证书内容摘要")
+            print(f"  证书信息:")
+            print(f"    - 版本: {cert_data['version']}")
+            print(f"    - 发布时间: {cert_data['issue_date']}")
+            print(f"    - 用户ID: {cert_data['user']['user_id']}")
+            print(f"    - 用户ID哈希: {cert_data['user']['user_id_hash'][:20]}...")
+
+            print(f"  删除详情:")
+            print(f"    - 密钥ID: {cert_data['deletion_details']['key_id']}")
+            print(f"    - 删除方法: {cert_data['deletion_details']['deletion_method']}")
+            print(
+                f"    - 验证状态: {cert_data['deletion_details']['verification_status']}"
+            )
+
+            print(f"  技术细节:")
+            print(
+                f"    - 加密算法: {cert_data['technical_details']['encryption_algorithm']}"
+            )
+            print(
+                f"    - 密钥长度: {cert_data['technical_details']['key_size_bits']} 位"
+            )
+
+            if "blockchain_proof" in cert_data:
+                print(f"  区块链证明:")
+                blockchain = cert_data["blockchain_proof"]
+                print(f"    - 网络: {blockchain['network']}")
+                print(f"    - 交易哈希: {blockchain['transaction_hash']}")
+                if blockchain.get("block_number"):
+                    print(f"    - 区块号: {blockchain['block_number']}")
+
+                if "verification" in cert_data:
+                    print(f"  验证方式:")
+                    verification = cert_data["verification"]
+                    print(f"    - Etherscan: {verification['blockchain_explorer_url']}")
+                    if "verification_tool_command" in verification:
+                        print(
+                            f"    - 验证工具: {verification['verification_tool_command']}"
+                        )
+            else:
+                print(f"  ⚠ 无区块链证明（系统未连接区块链）")
+
+            # 演示证书管理功能
+            print(f"\n[步骤 5/6] 证书管理功能")
+
+            from src.crypto.certificate_generator import DeletionCertificateGenerator
+
+            generator = DeletionCertificateGenerator(
+                contract_manager=self.kms._contract_manager
+            )
+
+            # 列出所有证书
+            certificates = generator.list_certificates()
+            print(f"  当前系统中共有 {len(certificates)} 个证书")
+
+            if len(certificates) > 0:
+                print(f"  最近的证书:")
+                for cert_id in certificates[:3]:  # 显示最近3个
+                    print(f"    - {cert_id}")
+
+            # 加载刚生成的证书
+            cert_id = cert["certificate_id"]
+            loaded_cert = generator.load_certificate(cert_id)
+            print(f"\n  ✓ 证书加载测试成功: {cert_id}")
+
+            # 验证说明
+            print(f"\n[步骤 6/6] 如何验证删除证书？")
+            print("  " + "-" * 60)
+
+            if has_blockchain and "blockchain_proof" in cert_data:
+                print(f"  方式1: 使用验证工具（推荐）")
+                print(f"         python tools/verify_deletion.py {cert['json_path']}")
+                print()
+                print(f"  方式2: 访问区块链浏览器")
+                print(f"         {verification['blockchain_explorer_url']}")
+                print()
+                print(f"  方式3: 编程验证")
+                print(
+                    f"         from src.crypto.certificate_generator import DeletionCertificateGenerator"
+                )
+                print(f"         generator = DeletionCertificateGenerator()")
+                print(f"         cert = generator.load_certificate('{cert_id}')")
+                print()
+                print(f"  任何人都可以独立验证删除证明，无需信任系统！")
+            else:
+                print(f"  ⚠ 当前环境未连接区块链")
+                print(f"  在生产环境中，区块链验证是必需的")
+                print()
+                print(f"  证书已保存到: {cert['json_path']}")
+                print(f"  可以查看证书内容: cat {cert['json_path']}")
+
+        else:
+            print(f"\n  ❌ 证书生成失败")
+            if "certificate_error" in deletion_result:
+                print(f"  错误信息: {deletion_result['certificate_error']}")
+
+        # 标记数据库中的用户删除状态
+        self.db.mark_user_deleted(
+            user_id=user_id,
+            key_id=deletion_result["key_id"],
+            destruction_method=deletion_result["method"],
+            blockchain_tx=deletion_result.get("blockchain_tx"),
+            proof_hash=deletion_result.get("proof_hash"),
+        )
+
+        print("\n" + "=" * 70)
+        print("✅ 证书场景演示完成！")
+        print("💡 提示：")
+        print("   - 证书已保存到 certificates/ 目录")
+        print("   - 证书为JSON格式，可直接查看")
+        print("   - 使用验证工具可独立验证删除操作")
+        print("=" * 70)
+
     def cleanup(self):
         """清理资源"""
         if hasattr(self, "db"):
@@ -461,12 +653,15 @@ def main():
   python demo.py --scenario basic           # 基本流程
   python demo.py --scenario comparison      # 方法对比
   python demo.py --scenario blockchain      # 区块链验证
+  python demo.py --scenario certificate     # 证书生成与验证
   python demo.py --all                      # 运行所有场景
         """,
     )
 
     parser.add_argument(
-        "--scenario", choices=["basic", "comparison", "blockchain"], help="选择演示场景"
+        "--scenario",
+        choices=["basic", "comparison", "blockchain", "certificate"],
+        help="选择演示场景",
     )
 
     parser.add_argument("--all", action="store_true", help="运行所有演示场景")
@@ -495,6 +690,8 @@ def main():
             if use_blockchain:
                 print("\n\n")
                 demo.run_blockchain_scenario()
+            print("\n\n")
+            demo.run_certificate_scenario()
         else:
             if args.scenario == "basic":
                 demo.run_basic_scenario()
@@ -502,6 +699,8 @@ def main():
                 demo.run_comparison_scenario()
             elif args.scenario == "blockchain":
                 demo.run_blockchain_scenario()
+            elif args.scenario == "certificate":
+                demo.run_certificate_scenario()
 
         # 清理
         demo.cleanup()

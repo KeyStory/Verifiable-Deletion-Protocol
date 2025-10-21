@@ -209,6 +209,128 @@ KMS_DESTRUCTION_METHOD=ctypes_secure
 python demo.py
 ```
 
+## Deleting Certificate Generation
+
+### Automatically Generating a Certificate
+```python
+from src.kms.key_manager import KeyManagementService, DestructionMethod
+from src.crypto.crypto_manager import CryptoManager
+
+kms = KeyManagementService()
+crypto = CryptoManager(kms)
+
+# Automatically Generate a Certificate When Deleting Data
+result = crypto.delete_user_data(
+user_id="user_001",
+destruction_method=DestructionMethod.CTYPES_SECURE,
+generate_certificate=True # Automatically Generate a Certificate
+)
+
+if 'certificate' in result:
+cert = result['certificate']
+print(f"Certificate ID: {cert['certificate_id']}")
+print(f"Save Location: {cert['json_path']}")
+```
+
+### Manually Generating a Certificate
+```python
+from src.crypto.certificate_generator import DeletionCertificateGenerator
+
+# Delete data first
+result = crypto.delete_user_data(
+user_id="user_001",
+destruction_method=DestructionMethod.CTYPES_SECURE,
+generate_certificate=False
+)
+
+# Manually generate a certificate again
+generator = DeletionCertificateGenerator(
+contract_manager=kms._contract_manager
+)
+
+cert_result = generator.generate_certificate(result)
+print(f"Certificate ID: {cert_result['certificate_id']}")
+```
+
+### Certificate Management
+```python
+from src.crypto.certificate_generator import DeletionCertificateGenerator
+
+generator = DeletionCertificateGenerator()
+
+# List all certificates
+certificates = generator.list_certificates()
+print(f"Total {len(certificates)} certificates")
+
+# Load the certificate
+cert_data = generator.load_certificate("CERT-20251021-ABC12345")
+print(cert_data)
+```
+
+### Certificate Structure
+
+The generated JSON certificate contains the following information:
+```json
+{
+"certificate": {
+"id": "CERT-20251021-ABC12345",
+"version": "1.0",
+"issue_date": "2025-10-21T10:30:00Z",
+"user": {
+"user_id": "user_001",
+"user_id_hash": "sha256:...",
+"deletion_request_time": "2025-10-21T10:28:00Z"
+
+}, 
+"deletion_details": { 
+"key_id": "user_user_001_dek", 
+"deletion_method": "ctypes_secure", 
+"deletion_timestamp": "2025-10-21T10:30:00Z", 
+"verification_status": "CONFIRMED" 
+}, 
+"blockchain_proof": { 
+"network": "ethereum_sepolia", 
+"transaction_hash": "0x123abc...", 
+"block_number": 12345678, 
+"proof_hash": "0x789def..." 
+}, 
+"verification": { 
+"blockchain_explorer_url": "https://sepolia.etherscan.io/tx/0x123...", 
+"verification_tool_command": "python tools/verify_deletion.py CERT-..." 
+}, "technical_details": {
+"encryption_algorithm": "AES-256-GCM",
+"key_size_bits": 256,
+"destruction_method": "ctypes_secure"
+
+}
+
+}
+
+```
+
+### Verifying the Deletion Certificate
+
+After the certificate is generated, you can verify it in the following ways:
+
+1. **Using the verification tool** (recommended):
+```bash
+python tools/verify_deletion.py certificates/CERT-20251021-ABC12345.json
+```
+
+2. **Access the blockchain explorer**:
+
+Open the `blockchain_explorer_url` link in the certificate.
+
+3. **Programmatic verification**:
+```python
+generator = DeletionCertificateGenerator()
+cert = generator.load_certificate("CERT-20251021-ABC12345")
+
+# View the blockchain certificate
+blockchain = cert['certificate']['blockchain_proof']
+print(f"Transaction hash: {blockchain['transaction_hash']}")
+```
+
 ---
 
 ## 🎮 Demo Usage
